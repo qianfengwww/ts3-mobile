@@ -10,17 +10,33 @@ enum class ReceiveDelayProfile(
     STABILITY(90, 70, 160, 1),
 }
 
+internal data class ReceiveDelayBounds(
+    val initialMs: Int,
+    val minMs: Int,
+    val maxMs: Int,
+)
+
 internal data class ReceivePolicy(
     val adaptive: Boolean = true,
     val confirmedPacketSamples: Int? = null,
     val delayProfile: ReceiveDelayProfile = ReceiveDelayProfile.BALANCED,
+    val bluetoothExpected: () -> Boolean = { false },
 ) {
     init {
         require(confirmedPacketSamples == null || confirmedPacketSamples in setOf(480, 960))
     }
 
+    fun effectiveBounds(): ReceiveDelayBounds =
+        if (adaptive && bluetoothExpected() && delayProfile == ReceiveDelayProfile.BALANCED) {
+            BLUETOOTH_BALANCED_BOUNDS
+        } else {
+            ReceiveDelayBounds(delayProfile.initialMs, delayProfile.minMs, delayProfile.maxMs)
+        }
+
     companion object {
         const val INPUT_AGE_NANOS = 60_000_000L
+        const val BLUETOOTH_INPUT_AGE_NANOS = 150_000_000L
+        val BLUETOOTH_BALANCED_BOUNDS = ReceiveDelayBounds(initialMs = 80, minMs = 60, maxMs = 150)
         const val MAX_CLIENT_SAMPLES = 11_520
         const val MAX_PACKET_BYTES = 61_440
         const val MAX_CLIENT_BYTES = 122_880

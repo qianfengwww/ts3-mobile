@@ -3,6 +3,7 @@ package io.github.ts3mobile.audio.opus
 import android.content.Context
 import android.media.AudioDeviceInfo
 import android.os.Looper
+import android.os.Process
 import io.github.ts3mobile.protocol.VoiceFrame
 import io.github.ts3mobile.protocol.sanitizedFailureTypes
 import java.util.concurrent.ConcurrentHashMap
@@ -32,11 +33,11 @@ class OpusAudioPlayer internal constructor(
         prepareOutputRoute: () -> Unit,
     ) : this(context, null, onRouteChanged, onStatusChanged, onUnsafeRoute = onUnsafeRoute, prepareOutputRoute = prepareOutputRoute)
 
-    private val inputQueue = VoiceReceiveQueue()
+    private val routeGuard = BluetoothPlaybackGuard()
+    private val inputQueue = VoiceReceiveQueue(bluetoothExpected = routeGuard::expectsBluetooth)
     private val receiveDiagnostics = PlaybackDiagnostics(inputQueue.budget.stats)
     private val participantGains = ConcurrentHashMap<Int, Float>()
     private val userMuted = AtomicBoolean(false)
-    private val routeGuard = BluetoothPlaybackGuard()
 
     @Volatile private var routeSwitching = false
     private val lifecycleLock = Any()
@@ -233,6 +234,7 @@ class OpusAudioPlayer internal constructor(
         var failed = false
         var previousTick: Long? = null
         try {
+            Process.setThreadPriority(Process.THREAD_PRIORITY_URGENT_AUDIO)
             System.err.println("TS3_AUDIO: playback codec=${NativeOpusInfo.version}")
             while (active.running.get()) {
                 TimeUnit.NANOSECONDS.sleep(pacer.waitNanos(System.nanoTime()))
@@ -281,7 +283,12 @@ class OpusAudioPlayer internal constructor(
         val session =
             PlaybackSession(
                 inputQueue,
-                PlaybackStreams(inputQueue, mutableSetOf(), participantGains, ReceivePolicy(delayProfile = initialProfile)),
+                PlaybackStreams(
+                    inputQueue,
+                    mutableSetOf(),
+                    participantGains,
+                    ReceivePolicy(delayProfile = initialProfile, bluetoothExpected = routeGuard::expectsBluetooth),
+                ),
                 {
                     outputFactory?.invoke()
                         ?: AndroidPlaybackOutput(

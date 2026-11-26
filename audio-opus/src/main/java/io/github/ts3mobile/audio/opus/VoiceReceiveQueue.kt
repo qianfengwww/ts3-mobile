@@ -3,6 +3,7 @@ package io.github.ts3mobile.audio.opus
 internal class VoiceReceiveQueue(
     private val inspect: (ByteArray) -> OpusPacketInfo = NativeOpusInfo::inspect,
     val budget: ReceiveMediaBudget = ReceiveMediaBudget(),
+    private val bluetoothExpected: () -> Boolean = { false },
 ) {
     private val arrivals = linkedMapOf<Int, Long>()
     private val frames = ArrayDeque<QueuedFrame>()
@@ -139,5 +140,8 @@ internal class VoiceReceiveQueue(
     private fun isExpired(
         queued: QueuedFrame,
         now: Long,
-    ): Boolean = now - queued.arrivalNanos > ReceivePolicy.INPUT_AGE_NANOS
+    ): Boolean {
+        val maxAgeNanos = if (bluetoothExpected()) ReceivePolicy.BLUETOOTH_INPUT_AGE_NANOS else ReceivePolicy.INPUT_AGE_NANOS
+        return now - queued.arrivalNanos > maxAgeNanos
+    }
 }

@@ -1,8 +1,9 @@
 name: Android CI
 
 on:
+  workflow_dispatch:
   push:
-    branches: [main]
+    branches: [main, 'fix/**', 'codex/**']
     paths-ignore:
       - '**/*.md'
       - 'docs/**'
@@ -82,6 +83,24 @@ jobs:
           --max-workers=2
           --no-build-cache
           --stacktrace
+
+      - name: Package debug APKs for device verification
+        run: |
+          mkdir -p build/debug-apks
+          cp app/build/outputs/apk/debug/app-debug.apk build/debug-apks/app-debug.apk
+          ./gradlew :app:assembleDebug -PdebugApplicationIdSuffix=.debug --max-workers=2 --no-build-cache
+          cp app/build/outputs/apk/debug/app-debug.apk build/debug-apks/app-coexist-debug.apk
+          ./gradlew :app:assembleDebug --max-workers=2 --no-build-cache
+
+      - name: Upload debug APK artifacts
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: app-debug-${{ github.sha }}-${{ github.run_attempt }}
+          retention-days: 14
+          if-no-files-found: error
+          path: |
+            build/debug-apks/app-debug.apk
+            build/debug-apks/app-coexist-debug.apk
 
       - name: Verify release probes, audio lifecycle, and core UI regressions
         timeout-minutes: 12

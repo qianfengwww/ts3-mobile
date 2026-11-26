@@ -167,6 +167,25 @@ class SessionPowerControllerTest {
             assertFalse(lock.isHeld)
         }
 
+    @Test
+    fun activeConnectedPlaybackHoldsWakeLockWithoutPersistentOptInAndReleasesOnIdle() =
+        runTest {
+            val lock = FakeLock()
+            val controller = SessionPowerController(backgroundScope, lock, { testScheduler.currentTime }, {})
+            controller.update(false, ConnectionPhase.CONNECTED, true, playbackActive = false)
+            assertFalse(lock.isHeld)
+
+            controller.update(false, ConnectionPhase.CONNECTED, true, playbackActive = true)
+            assertTrue(lock.isHeld)
+            advanceTimeBy(600_001)
+            runCurrent()
+            assertTrue(lock.acquisitions >= 3)
+
+            controller.update(false, ConnectionPhase.CONNECTED, true, playbackActive = false)
+            assertFalse(lock.isHeld)
+            controller.close()
+        }
+
     private class FakeLock : SessionCpuLock {
         override var isHeld = false
         var acquisitions = 0

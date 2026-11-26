@@ -97,6 +97,11 @@ internal class PlaybackSession(
                 check(retireOutput(OutputRetirement.DRAINED)) { "Previous audio output could not be released" }
                 idleSince = now
                 status = PlaybackStatus.BUFFERING
+            } else if (current.talkspurtIdle) {
+                streams.finishTalkspurts()
+                if (idleSince == null) idleSince = now
+            } else {
+                idleSince = null
             }
         } catch (failure: RuntimeException) {
             stats.outputFailures.incrementAndGet()

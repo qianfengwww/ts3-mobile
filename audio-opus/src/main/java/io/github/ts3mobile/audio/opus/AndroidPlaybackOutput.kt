@@ -13,7 +13,7 @@ import kotlin.math.max
 
 internal class AndroidPlaybackOutput(
     preferredDevice: AudioDeviceInfo?,
-    onRoutingChanged: (AndroidPlaybackOutput) -> Unit,
+    private val onRoutingChanged: (AndroidPlaybackOutput) -> Unit,
     private val routeGuard: BluetoothPlaybackGuard,
     private val onUnsafeRoute: (AndroidPlaybackOutput) -> Unit,
     private val stats: ReceiveStats? = null,
@@ -22,10 +22,14 @@ internal class AndroidPlaybackOutput(
     private val routingListener: AudioRouting.OnRoutingChangedListener
     private val outputLock = Any()
     private val routeRevision = routeGuard.revision()
+    private val bluetoothExpected =
+        routeGuard.expectsBluetooth() ||
+            preferredDevice?.let { AudioRouteDevices.routeKindForDeviceType(it.type) } == AudioRouteKind.BLUETOOTH
     private var silenced = false
     private var closed = false
     private var reportedUnderruns = 0
     private var performanceModeObserved = false
+    private var upgradedToBluetooth = false
     private var bluetoothWaitStartedAt: Long? = null
 
     @Volatile
@@ -43,7 +47,8 @@ internal class AndroidPlaybackOutput(
                 AudioFormat.ENCODING_PCM_16BIT,
             )
         check(minimumBytes > 0) { "Unable to determine audio buffer size: $minimumBytes" }
-        val performanceMode = playbackPerformanceMode(routeGuard.expectsBluetooth(), BuildConfig.BLUETOOTH_STANDARD_OUTPUT_EXPERIMENT)
+        val performanceMode = playbackPerformanceMode(bluetoothExpected)
+        val bufferSizeBytes = playbackBufferSizeBytes(minimumBytes, bluetoothExpected)
         track =
             AudioTrack.Builder()
                 .setAudioAttributes(voicePlaybackAudioAttributes())
@@ -54,7 +59,7 @@ internal class AndroidPlaybackOutput(
                         .setChannelMask(AudioFormat.CHANNEL_OUT_MONO)
                         .build(),
                 )
-                .setBufferSizeInBytes(max(minimumBytes, TalkerJitterPipeline.MIX_TICK_SAMPLES * 2 * 4))
+                .setBufferSizeInBytes(bufferSizeBytes)
                 .setTransferMode(AudioTrack.MODE_STREAM)
                 .setPerformanceMode(performanceMode)
                 .build()
@@ -64,6 +69,12 @@ internal class AndroidPlaybackOutput(
         }
         try {
             setPreferredDevice(preferredDevice)
+            if (bluetoothExpected && Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+                val bufferFrames = track.bufferSizeInFrames
+                if (bufferFrames > 0) {
+                    track.setStartThresholdInFrames(minOf(bufferFrames, BLUETOOTH_START_THRESHOLD_FRAMES).coerceAtLeast(1))
+                }
+            }
             track.setVolume(0f)
             routingListener =
                 AudioRouting.OnRoutingChangedListener { routing ->
@@ -121,6 +132,7 @@ internal class AndroidPlaybackOutput(
     }
 
     private fun checkRoute(): Boolean {
+        var upgradeBluetoothTrack = false
         val decision =
             synchronized(outputLock) {
                 if (closed || silenced) return false
@@ -132,11 +144,25 @@ internal class AndroidPlaybackOutput(
                 val timedOut = waitStarted != null && now - waitStarted >= BLUETOOTH_ROUTE_TIMEOUT_MS
                 routeGuard.evaluate(kind, routeRevision, timedOut).also {
                     bluetoothWaitStartedAt = if (it == PlaybackRouteDecision.WAIT_FOR_BLUETOOTH) waitStarted ?: now else null
-                    track.setVolume(if (it == PlaybackRouteDecision.ALLOW) 1f else 0f)
-                    if (it == PlaybackRouteDecision.ALLOW && kind != null) observePerformanceMode()
+                    val needsStandardBluetooth =
+                        it == PlaybackRouteDecision.ALLOW && kind == AudioRouteKind.BLUETOOTH && !bluetoothExpected
+                    if (needsStandardBluetooth) {
+                        track.setVolume(0f)
+                        if (!upgradedToBluetooth) {
+                            upgradedToBluetooth = true
+                            upgradeBluetoothTrack = true
+                        }
+                    } else {
+                        track.setVolume(if (it == PlaybackRouteDecision.ALLOW) 1f else 0f)
+                        if (it == PlaybackRouteDecision.ALLOW && kind != null) observePerformanceMode()
+                    }
                 }
             }
         if (decision == PlaybackRouteDecision.MUTE) onUnsafeRoute(this)
+        if (upgradeBluetoothTrack) {
+            onRoutingChanged(this)
+            return false
+        }
         return decision == PlaybackRouteDecision.ALLOW
     }
 
@@ -192,6 +218,15 @@ internal class AndroidPlaybackOutput(
     }
 }
 
+private const val BYTES_PER_SAMPLE = 2
+internal const val DEFAULT_MIN_BUFFER_BYTES = TalkerJitterPipeline.MIX_TICK_SAMPLES * BYTES_PER_SAMPLE * 4
+internal const val BLUETOOTH_BUFFER_MULTIPLIER = 4
+internal const val BLUETOOTH_MIN_BUFFER_SAMPLES = 7_680
+internal const val BLUETOOTH_MAX_BUFFER_SAMPLES = 11_520
+internal const val BLUETOOTH_MIN_BUFFER_BYTES = BLUETOOTH_MIN_BUFFER_SAMPLES * BYTES_PER_SAMPLE
+internal const val BLUETOOTH_MAX_BUFFER_BYTES = BLUETOOTH_MAX_BUFFER_SAMPLES * BYTES_PER_SAMPLE
+internal const val BLUETOOTH_START_THRESHOLD_FRAMES = 2_400
+
 internal fun voicePlaybackAudioAttributes(): AudioAttributes =
     AudioAttributes.Builder()
         .setUsage(AudioAttributes.USAGE_MEDIA)
@@ -201,7 +236,23 @@ internal fun voicePlaybackAudioAttributes(): AudioAttributes =
         }
         .build()
 
-internal fun playbackPerformanceMode(
+internal fun playbackPerformanceMode(bluetoothExpected: Boolean): Int =
+    if (bluetoothExpected) AudioTrack.PERFORMANCE_MODE_NONE else AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+
+internal fun playbackBufferSizeBytes(
+    minimumBytes: Int,
     bluetoothExpected: Boolean,
-    standardBluetoothExperiment: Boolean,
-): Int = if (bluetoothExpected && standardBluetoothExperiment) AudioTrack.PERFORMANCE_MODE_NONE else AudioTrack.PERFORMANCE_MODE_LOW_LATENCY
+): Int {
+    require(minimumBytes > 0) { "Invalid minimum audio buffer size: $minimumBytes" }
+    val raw =
+        if (bluetoothExpected) {
+            val scaled =
+                (minimumBytes.toLong() * BLUETOOTH_BUFFER_MULTIPLIER)
+                    .coerceIn(BLUETOOTH_MIN_BUFFER_BYTES.toLong(), BLUETOOTH_MAX_BUFFER_BYTES.toLong())
+                    .toInt()
+            max(minimumBytes, scaled)
+        } else {
+            max(minimumBytes, DEFAULT_MIN_BUFFER_BYTES)
+        }
+    return if (raw % BYTES_PER_SAMPLE != 0 && raw < Int.MAX_VALUE) raw + 1 else raw
+}

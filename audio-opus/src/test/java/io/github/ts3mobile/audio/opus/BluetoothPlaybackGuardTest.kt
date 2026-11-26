@@ -7,13 +7,18 @@ import org.junit.Test
 class BluetoothPlaybackGuardTest {
     private val guard = BluetoothPlaybackGuard()
 
-    @Test fun standardOutputExperimentChangesOnlyExpectedBluetooth() {
+    @Test fun expectedBluetoothDisablesLowLatencyAndScalesBufferWhilePreservingWiredLowLatency() {
         guard.select(7, true)
-        assertEquals(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY, playbackPerformanceMode(guard.expectsBluetooth(), false))
-        assertEquals(AudioTrack.PERFORMANCE_MODE_NONE, playbackPerformanceMode(guard.expectsBluetooth(), true))
+        assertEquals(AudioTrack.PERFORMANCE_MODE_NONE, playbackPerformanceMode(guard.expectsBluetooth()))
+        assertEquals(BLUETOOTH_MIN_BUFFER_BYTES, playbackBufferSizeBytes(2_048, guard.expectsBluetooth()))
+        assertEquals(19_200, playbackBufferSizeBytes(4_800, guard.expectsBluetooth()))
+        assertEquals(BLUETOOTH_MAX_BUFFER_BYTES, playbackBufferSizeBytes(8_192, guard.expectsBluetooth()))
+        assertEquals(32_000, playbackBufferSizeBytes(32_000, guard.expectsBluetooth()))
         assertEquals(PlaybackRouteDecision.WAIT_FOR_BLUETOOTH, guard.evaluate(AudioRouteKind.SPEAKER))
         guard.select(8, false)
-        assertEquals(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY, playbackPerformanceMode(guard.expectsBluetooth(), true))
+        assertEquals(AudioTrack.PERFORMANCE_MODE_LOW_LATENCY, playbackPerformanceMode(guard.expectsBluetooth()))
+        assertEquals(DEFAULT_MIN_BUFFER_BYTES, playbackBufferSizeBytes(2_048, guard.expectsBluetooth()))
+        assertEquals(4_800, playbackBufferSizeBytes(4_800, guard.expectsBluetooth()))
     }
 
     @Test fun requestedBluetoothBlocksSpeakerAndUnknownRoutesUntilBluetoothIsReady() {

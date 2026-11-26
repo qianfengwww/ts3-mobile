@@ -7,6 +7,7 @@ import android.content.IntentFilter
 import android.os.PowerManager
 import android.os.SystemClock
 import androidx.core.content.ContextCompat
+import io.github.ts3mobile.audio.opus.PlaybackStatus
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -81,12 +82,25 @@ internal class BackgroundRuntimeController(
         observeJob =
             scope.launch {
                 combine(
-                    state.map { it.status.phase to it.backgroundRuntime.keepCpuAwake }.distinctUntilChanged(),
+                    state.map {
+                        Triple(
+                            it.status.phase,
+                            it.backgroundRuntime.keepCpuAwake,
+                            it.playbackStatus == PlaybackStatus.PLAYING,
+                        )
+                    }.distinctUntilChanged(),
                     networkAvailable,
-                ) { (phase, enabled), available -> Triple(phase, enabled, available) }
+                ) { (phase, enabled, playbackActive), available ->
+                    PlaybackPowerInputs(phase, enabled, available, playbackActive)
+                }
                     .distinctUntilChanged()
-                    .collect { (phase, enabled, available) ->
-                        powerController.update(enabled, phase, available && !sessionGeneration.isDisconnectRequested)
+                    .collect { inputs ->
+                        powerController.update(
+                            enabled = inputs.enabled,
+                            phase = inputs.phase,
+                            networkAvailable = inputs.networkAvailable && !sessionGeneration.isDisconnectRequested,
+                            playbackActive = inputs.playbackActive,
+                        )
                     }
             }
     }
@@ -103,7 +117,7 @@ internal class BackgroundRuntimeController(
         )
 
     fun releaseForDisconnect() {
-        powerController.update(false, state.value.status.phase, false)
+        powerController.update(false, state.value.status.phase, false, playbackActive = false)
     }
 
     fun refresh() {
@@ -141,3 +155,10 @@ internal class BackgroundRuntimeController(
         private const val KEEP_AWAKE_KEY = "keep_cpu_awake"
     }
 }
+
+private data class PlaybackPowerInputs(
+    val phase: io.github.ts3mobile.protocol.ConnectionPhase,
+    val enabled: Boolean,
+    val networkAvailable: Boolean,
+    val playbackActive: Boolean,
+)

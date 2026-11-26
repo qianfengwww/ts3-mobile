@@ -2,5 +2,5 @@
 # Do not commit local.properties; it may contain a private SDK installation path.
 sdk.dir=C:\\Android\\Sdk
 
-# Bluetooth playback A/B candidate (Gradle CLI only, omitted = false):
-# ./gradlew -PbluetoothStandardOutputExperiment=true :app:assembleRelease
+# Optional side-by-side Debug package suffix for coexistence with an installed release APK:
+# ./gradlew -PdebugApplicationIdSuffix=.debug :app:assembleDebug

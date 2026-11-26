@@ -4,8 +4,7 @@ import kotlin.math.abs
 import kotlin.math.ceil
 
 internal class AdaptiveJitterDelay(private val policy: ReceivePolicy) {
-    private val profile = policy.delayProfile
-    var targetMs = profile.initialMs
+    var targetMs = policy.effectiveBounds().initialMs
         private set
     private var previousSequence: Long? = null
     private var previousArrival = 0L
@@ -32,17 +31,18 @@ internal class AdaptiveJitterDelay(private val policy: ReceivePolicy) {
             deviations.addLast(deviation)
             stable++
             if (policy.adaptive && deviations.size == ReceivePolicy.JITTER_WINDOW) {
+                val bounds = policy.effectiveBounds()
                 val ordered = deviations.sorted()
                 val percentile = ordered[ReceivePolicy.JITTER_PERCENTILE_INDEX]
-                val desiredMs = profile.minMs + ReceivePolicy.JITTER_MULTIPLIER * percentile
+                val desiredMs = bounds.minMs + ReceivePolicy.JITTER_MULTIPLIER * percentile
                 val desired =
                     (ceil(desiredMs / ReceivePolicy.TARGET_STEP_MS) * ReceivePolicy.TARGET_STEP_MS).toInt()
-                        .coerceIn(profile.minMs, profile.maxMs)
+                        .coerceIn(bounds.minMs, bounds.maxMs)
                 if (desired > targetMs && stable % ReceivePolicy.INCREASE_EVERY_PACKETS == 0) {
-                    targetMs = minOf(profile.maxMs, targetMs + ReceivePolicy.TARGET_STEP_MS)
+                    targetMs = minOf(bounds.maxMs, targetMs + ReceivePolicy.TARGET_STEP_MS)
                 }
                 if (desired < targetMs && stable >= ReceivePolicy.STABLE_PACKETS) {
-                    targetMs = maxOf(profile.minMs, targetMs - ReceivePolicy.TARGET_STEP_MS)
+                    targetMs = maxOf(bounds.minMs, targetMs - ReceivePolicy.TARGET_STEP_MS)
                     stable = 0
                 }
             }
@@ -57,7 +57,8 @@ internal class AdaptiveJitterDelay(private val policy: ReceivePolicy) {
     fun noteLate() {
         stable = 0
         if (policy.adaptive && ++late >= ReceivePolicy.LATE_PACKETS_TO_INCREASE) {
-            targetMs = minOf(profile.maxMs, targetMs + ReceivePolicy.TARGET_STEP_MS)
+            val bounds = policy.effectiveBounds()
+            targetMs = minOf(bounds.maxMs, targetMs + ReceivePolicy.TARGET_STEP_MS)
             late = 0
         }
     }
@@ -66,5 +67,9 @@ internal class AdaptiveJitterDelay(private val policy: ReceivePolicy) {
         previousSequence = null
         stable = 0
         deviations.clear()
+        if (policy.adaptive) {
+            val bounds = policy.effectiveBounds()
+            targetMs = targetMs.coerceIn(bounds.minMs, bounds.maxMs)
+        }
     }
 }

@@ -309,8 +309,9 @@ writer, and service destruction flushes the final snapshot. Its v2 report wraps
 the existing counters and the persistent event history, including power flags
 and Android 11+ process-exit reason codes. `SessionNotifications` owns foreground
 types and notification actions. `BackgroundRuntimeController` connects Android
-power state and an opt-in preference to the JVM-tested `SessionPowerController`;
-timed leases renew for connected sessions, and recovery has a two-minute budget
+power state, active playback status and an opt-in preference to the JVM-tested
+`SessionPowerController`; timed leases renew for opted-in connected sessions or
+while connected playback is active, and recovery has a two-minute budget
 that survives transient ERROR states and resets for a new manual connection.
 `DefaultNetworkMonitor` retains default-network identity, capability and blocked
 state for switch-aware liveness checks and reconnect waiting.
@@ -490,10 +491,11 @@ implementation. A0 fingerprints and synthetic fixtures precede A1 continuity.
 `PlaybackStreams` owns per-speaker receive/decode/mix; `PlaybackTimeline` owns
 PLAYING/RECOVERING/DRAINING/IDLE and `AndroidPlaybackOutput` owns Android I/O.
 Per-speaker startup buffering begins at 60 ms and now adapts within 40–120 ms.
-Temporary starvation retains output for 60 ms, or 500 ms while the actual output
-is Bluetooth, without adding silence or inventing trailing PLC. The Bluetooth
-grace avoids repeated SCO setup during short gaps; unavailable routes still stop
-playback immediately. Known-gap PLC is capped at three packets and 60 ms. Natural
+Temporary starvation retains output for 60 ms on standard routes without adding
+silence or inventing trailing PLC. Confirmed Bluetooth outputs retain the track
+for up to 35 s across conversational pauses, feeding a bounded 50 ms zero-amplitude
+cushion after 60 ms of idle while settling completed talkspurts; unavailable routes
+still stop playback immediately. Known-gap PLC is capped at three packets and 60 ms. Natural
 drain waits for accepted sample counts using the unwrapped unsigned playback head;
 remaining duration plus 100 ms bounds waiting, with a 500 ms upper limit and an
 explicit timeout counter. No new fixed lookahead is added.
@@ -621,9 +623,11 @@ before starting each playback worker. A saved change within a connection invalid
 old receive queue and resets the streams and output on the existing worker without
 restarting the transport, capture or routing. Diagnostics record the effective profile
 when playback starts and when the worker applies a switch; installs without a saved choice use Balanced.
-For device A/B, the opt-in `bluetoothStandardOutputExperiment` build parameter
-requests the ordinary AudioTrack path only when Bluetooth is expected. It does
-not change route admission, buffering parameters, or default builds.
+Expected Bluetooth routes request `PERFORMANCE_MODE_NONE` with a 4x minimum buffer
+(clamped to 160–240 ms unless the platform minimum is larger, and a 50 ms API 31+
+start threshold), extend the input-queue residence bound to 150 ms, and raise the
+Balanced jitter bounds to 80 ms initial / 60–150 ms while leaving wired and speaker
+low-latency paths unchanged.
 
 An already-routed Bluetooth track that has accepted PCM but has not consumed its
 first frame can wait up to 1.5 s from startup before a stalled write triggers

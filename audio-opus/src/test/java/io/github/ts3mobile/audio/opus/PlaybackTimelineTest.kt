@@ -26,18 +26,19 @@ class PlaybackTimelineTest {
     }
 
     @Test
-    fun bluetoothResumesAfterShortStarvationWithoutRecreatingOrFillingTheOutput() {
+    fun bluetoothShortJitterStarvationResumesWithoutAppendingSilence() {
         val output = FakePlaybackOutput().apply { routedKind = AudioRouteKind.BLUETOOTH }
         val timeline = PlaybackTimeline(output)
         timeline.start(0L)
         timeline.tick(shortArrayOf(11, 22), 0L)
         output.playbackHead = 2
-        for (gapMs in 10L..380L step 10) timeline.tick(null, gapMs * MILLIS)
+        for (gapMs in 10L..50L step 10) timeline.tick(null, gapMs * MILLIS)
 
         assertEquals(PlaybackTimeline.State.RECOVERING, timeline.state)
+        assertFalse(timeline.talkspurtIdle)
         assertEquals(0, output.discardCount)
         assertEquals(1, output.writeCalls)
-        timeline.tick(shortArrayOf(33, 44), 390 * MILLIS)
+        timeline.tick(shortArrayOf(33, 44), 50 * MILLIS)
 
         assertEquals(PlaybackTimeline.State.PLAYING, timeline.state)
         assertEquals(2, output.writeCalls)
@@ -45,20 +46,59 @@ class PlaybackTimelineTest {
     }
 
     @Test
-    fun bluetoothDrainsAfterTheBoundedGapWithoutAppendingSilence() {
+    fun bluetoothConversationalPausesKeepTrackWarmWithBoundedSilenceAndRetireAfterExtendedIdle() {
+        val stats = ReceiveStats()
         val output = FakePlaybackOutput().apply { routedKind = AudioRouteKind.BLUETOOTH }
-        val timeline = PlaybackTimeline(output)
+        val timeline = PlaybackTimeline(output, receiveStats = stats)
         timeline.start(0L)
-        timeline.tick(shortArrayOf(11), 0L)
-        output.playbackHead = 1
+        timeline.tick(shortArrayOf(11, 22), 0L)
+        output.playbackHead = 2L
         timeline.tick(null, TICK)
-        timeline.tick(null, TICK + 499 * MILLIS)
-        assertEquals(0, output.discardCount)
-        timeline.tick(null, TICK + 500 * MILLIS)
 
+        for (elapsedMs in 70L..5_000L step 100L) {
+            output.playbackHead = output.acceptedFrames
+            timeline.tick(null, elapsedMs * MILLIS)
+        }
+        assertEquals(PlaybackTimeline.State.RECOVERING, timeline.state)
+        assertTrue(timeline.talkspurtIdle)
+        assertEquals(0, output.discardCount)
+        assertEquals(2L, timeline.submittedFrames)
+        assertEquals(2L, stats.counters()[AudioReceiveCounter.OUTPUT_SAMPLES])
+
+        timeline.tick(shortArrayOf(33, 44), 5_100L * MILLIS)
+        assertEquals(PlaybackTimeline.State.PLAYING, timeline.state)
+        assertFalse(timeline.talkspurtIdle)
+        assertEquals(4L, timeline.submittedFrames)
+        assertEquals(listOf<Short>(11, 22, 33, 44), output.accepted.filter { it.toInt() != 0 })
+
+        output.playbackHead = output.acceptedFrames
+        timeline.tick(null, 5_110L * MILLIS)
+        val idleDeadline = 5_110L * MILLIS + PlaybackTimeline.BLUETOOTH_RECOVERY_NANOS
+        output.playbackHead = output.acceptedFrames
+        timeline.tick(null, idleDeadline - MILLIS)
+        assertEquals(0, output.discardCount)
+
+        output.playbackHead = output.acceptedFrames
+        timeline.tick(null, idleDeadline)
         assertEquals(PlaybackTimeline.State.IDLE, timeline.state)
         assertEquals(1, output.discardCount)
-        assertEquals(1, output.writeCalls)
+    }
+
+    @Test
+    fun bluetoothKeepAliveRetiresCleanlyWithoutZeroWritePenaltyWhenSystemSuspendsIdleTrack() {
+        val stats = ReceiveStats()
+        val output = FakePlaybackOutput().apply { routedKind = AudioRouteKind.BLUETOOTH }
+        val timeline = PlaybackTimeline(output, receiveStats = stats)
+        timeline.start(0L)
+        timeline.tick(shortArrayOf(11, 22), 0L)
+        output.playbackHead = 2L
+        timeline.tick(null, TICK)
+        output.maxWriteSamples = 0
+
+        timeline.tick(null, TICK + PlaybackTimeline.RECOVERY_NANOS)
+        assertEquals(PlaybackTimeline.State.IDLE, timeline.state)
+        assertEquals(1, output.discardCount)
+        assertEquals(0L, stats.counters()[AudioReceiveCounter.ZERO_WRITES])
     }
 
     @Test
@@ -212,6 +252,10 @@ class PlaybackTimelineTest {
         assertEquals(0, output.discardCount)
         output.playbackHead = 2L
         timeline.tick(null, 1120 * MILLIS)
+        assertEquals(PlaybackTimeline.State.RECOVERING, timeline.state)
+        assertEquals(2L, timeline.playedFrames)
+        output.playbackHead = output.acceptedFrames
+        timeline.tick(null, TICK + PlaybackTimeline.BLUETOOTH_RECOVERY_NANOS)
         assertEquals(PlaybackTimeline.State.IDLE, timeline.state)
         assertEquals(0L, timeline.drainTimeoutCount)
     }

@@ -67,6 +67,35 @@ class PlaybackSessionTest {
         }
     }
 
+    @Test fun bluetoothMultiPhraseConversationRetainsSingleOutputAndDropsImmediatelyOnRouteLoss() {
+        Fixture().use { fixture ->
+            fixture.defaultRoutedKind = AudioRouteKind.BLUETOOTH
+            for (phrase in 0 until 4) {
+                val baseMs = phrase * 3_500L
+                for (packet in 0 until 6) {
+                    val now = (baseMs + packet * 20L) * MS
+                    fixture.feed(now)
+                    fixture.outputs.lastOrNull()?.let { it.playbackHead = it.acceptedFrames }
+                }
+                for (idleStep in 1..25) {
+                    val now = (baseMs + 120L + idleStep * 100L) * MS
+                    fixture.outputs.lastOrNull()?.let { it.playbackHead = it.acceptedFrames }
+                    fixture.session.tick(now)
+                }
+            }
+            val output = fixture.outputs.single()
+            assertFalse(output.closed)
+            assertEquals(1, fixture.creations)
+            assertEquals(0L, fixture.queue.budget.stats.counters()[AudioReceiveCounter.PCM_RESET_DROPPED])
+            assertEquals(0L, fixture.queue.budget.stats.counters()[AudioReceiveCounter.SEQUENCE_SKIPPED])
+
+            output.routeReady = false
+            fixture.session.tick(15_000L * MS)
+            assertTrue(output.closed)
+            assertEquals(PlaybackStatus.BUFFERING, fixture.session.status)
+        }
+    }
+
     @Test fun changingProfileReleasesOldOutputAndAppliesNewDelayToFreshSpeech() {
         Fixture().use { fixture ->
             fixture.feed(0L)
@@ -300,6 +329,7 @@ class PlaybackSessionTest {
         var blockWrites = false
         var mayWrite = true
         var routeReady = true
+        var defaultRoutedKind: AudioRouteKind? = null
         private var sequence = 0
         val session =
             PlaybackSession(
@@ -314,6 +344,7 @@ class PlaybackSessionTest {
                     check(!factoryFails) { "Synthetic output creation failure" }
                     FakePlaybackOutput().also {
                         it.routeReady = routeReady
+                        it.routedKind = defaultRoutedKind
                         if (blockWrites) it.maxWriteSamples = 0
                         outputs += it
                     }

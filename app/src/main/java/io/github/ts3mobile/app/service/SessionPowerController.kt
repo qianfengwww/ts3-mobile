@@ -19,6 +19,7 @@ internal class SessionPowerPolicy(private val recoveryBudgetMs: Long = 120_000L)
         phase: ConnectionPhase,
         networkAvailable: Boolean,
         nowMs: Long,
+        playbackActive: Boolean = false,
     ): Long {
         if (phase == ConnectionPhase.CONNECTED || phase in disconnectedPhases) {
             recoveryStartedAtMs = null
@@ -26,7 +27,10 @@ internal class SessionPowerPolicy(private val recoveryBudgetMs: Long = 120_000L)
             recoveryStartedAtMs = nowMs
         }
         // ERROR releases the lock but retains the budget across failed retries.
-        if (!enabled || !networkAvailable) return 0L
+        if (!networkAvailable) return 0L
+        if (!enabled) {
+            return if (playbackActive && phase == ConnectionPhase.CONNECTED) MAX_LEASE_MS else 0L
+        }
         return when (phase) {
             ConnectionPhase.CONNECTED -> MAX_LEASE_MS
             in recoveryPhases ->
@@ -63,6 +67,7 @@ internal class SessionPowerController(
     private var enabled = false
     private var phase = ConnectionPhase.DISCONNECTED
     private var networkAvailable = false
+    private var playbackActive = false
     private var renewalJob: Job? = null
     private var closed = false
     private var lastReportedHeld = false
@@ -76,7 +81,7 @@ internal class SessionPowerController(
         policy.beginSession()
         // Start the lease before the collector observes CONNECTING; use current
         // inputs because explicit disconnect clears the controller's cache.
-        update(enabled, ConnectionPhase.CONNECTING, networkAvailable)
+        update(enabled, ConnectionPhase.CONNECTING, networkAvailable, playbackActive = false)
     }
 
     @Synchronized
@@ -84,11 +89,13 @@ internal class SessionPowerController(
         enabled: Boolean,
         phase: ConnectionPhase,
         networkAvailable: Boolean,
+        playbackActive: Boolean = false,
     ) {
         if (closed) return
         this.enabled = enabled
         this.phase = phase
         this.networkAvailable = networkAvailable
+        this.playbackActive = playbackActive
         renewalJob?.cancel()
         val lease = renew()
         if (lease <= 0L) return
@@ -103,7 +110,7 @@ internal class SessionPowerController(
     }
 
     private fun renew(): Long {
-        val lease = policy.leaseMs(enabled, phase, networkAvailable && isSessionActive(), clockMs())
+        val lease = policy.leaseMs(enabled, phase, networkAvailable && isSessionActive(), clockMs(), playbackActive)
         val heldBefore = cpuLock.isHeld
         if (lease > 0L) {
             cpuLock.acquire(lease)

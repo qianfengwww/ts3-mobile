@@ -51,6 +51,19 @@ class VoiceReceiveQueueTest {
         assertFalse(queue.offer(queued(1, 2, 0), 60 * MS + 1))
     }
 
+    @Test fun bluetoothExpectedExtendsInputAgeToleranceWithoutAffectingStandardRoutes() {
+        var bluetooth = true
+        val queue = VoiceReceiveQueue({ OpusPacketInfo(960) }, bluetoothExpected = { bluetooth })
+        assertTrue(queue.offer(queued(1, 0, 0)))
+        assertTrue(queue.poll(120 * MS) != null)
+        assertEquals(0L, queue.budget.stats.stalePackets.get())
+        assertTrue(queue.offer(queued(1, 1, 0)))
+        assertNull(queue.poll(150 * MS + 1))
+        bluetooth = false
+        assertTrue(queue.offer(queued(1, 2, 200 * MS), 200 * MS))
+        assertNull(queue.poll(260 * MS + 1))
+    }
+
     @Test fun transfersRetainSharedBudgetAndOverloadInvalidatesOnlyTheAffectedTalker() {
         val queue = VoiceReceiveQueue({ OpusPacketInfo(5760) })
         queue.offer(queued(1, 0, 0))

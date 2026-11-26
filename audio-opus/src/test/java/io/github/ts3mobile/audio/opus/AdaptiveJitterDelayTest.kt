@@ -57,4 +57,17 @@ class AdaptiveJitterDelayTest {
         }
         assertEquals(60, delay.targetMs)
     }
+
+    @Test fun bluetoothBalancedFloorStaysAboveSixtyAndRestoresWhenSwitchedToWired() {
+        var bluetooth = true
+        val delay = AdaptiveJitterDelay(ReceivePolicy(bluetoothExpected = { bluetooth }))
+        assertEquals(80, delay.targetMs)
+        repeat(1_500) { index -> delay.observe(index.toLong(), index * 20_000_000L, OpusPacketInfo(960)) }
+        assertEquals(60, delay.targetMs)
+        repeat(100) { delay.noteLate() }
+        assertEquals(150, delay.targetMs)
+        bluetooth = false
+        delay.discontinuity()
+        assertEquals(120, delay.targetMs)
+    }
 }

@@ -5,6 +5,12 @@ plugins {
     alias(libs.plugins.ktlint)
 }
 
+val debugApplicationIdSuffix =
+    providers.gradleProperty("debugApplicationIdSuffix").orNull?.trim()?.takeIf { it.isNotEmpty() }
+require(debugApplicationIdSuffix == null || debugApplicationIdSuffix.startsWith(".")) {
+    "debugApplicationIdSuffix must start with '.', for example -PdebugApplicationIdSuffix=.debug"
+}
+
 android {
     namespace = "io.github.ts3mobile.app"
     compileSdk = 35
@@ -21,6 +27,11 @@ android {
     }
 
     buildTypes {
+        debug {
+            if (debugApplicationIdSuffix != null) {
+                applicationIdSuffix = debugApplicationIdSuffix
+            }
+        }
         release {
             isMinifyEnabled = true
             proguardFiles(
